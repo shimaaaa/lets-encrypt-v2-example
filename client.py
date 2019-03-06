@@ -17,6 +17,33 @@ from cryptography.hazmat.primitives import hashes
 logger = getLogger(__name__)
 
 
+class CryptoUtil:
+
+    @staticmethod
+    def generate_private_key() -> rsa.RSAPrivateKey:
+        return rsa.generate_private_key(
+            public_exponent=65537,
+            key_size=2048,
+            backend=default_backend()
+        )
+
+    @staticmethod
+    def convert_private_key_to_pem(private_key: rsa.RSAPrivateKey) -> str:
+        return private_key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.TraditionalOpenSSL,
+            encryption_algorithm=serialization.NoEncryption()
+        ).decode()
+
+    @staticmethod
+    def convert_pem_to_private_key(pem: str) -> rsa.RSAPrivateKey:
+        return serialization.load_pem_private_key(
+            pem.encode(),
+            None,
+            default_backend()
+        )
+
+
 class Account:
 
     def __init__(self):
@@ -41,25 +68,13 @@ class Account:
             self._generate_key(account_key_file)
         with account_key_file.open() as f:
             self._key_pem = f.read()
-        self._key_object = serialization.load_pem_private_key(
-            self._key_pem.encode(),
-            None,
-            default_backend()
-        )
+        self._key_object = CryptoUtil.convert_pem_to_private_key(self._key_pem)
 
     def _generate_key(self, account_key_file: Path):
         with account_key_file.open(mode='w') as f:
-            key = rsa.generate_private_key(
-                public_exponent=65537,
-                key_size=2048,
-                backend=default_backend()
-            )
-            pem = key.private_bytes(
-                encoding=serialization.Encoding.PEM,
-                format=serialization.PrivateFormat.TraditionalOpenSSL,
-                encryption_algorithm=serialization.NoEncryption()
-            )
-            f.write(pem.decode())
+            key = CryptoUtil.generate_private_key()
+            pem = CryptoUtil.convert_private_key_to_pem(key)
+            f.write(pem)
 
     def _load_config(self):
         config_file = Path('account.json')
@@ -238,6 +253,17 @@ class LetsEncryptApiClient:
             directory.mkdir()
         return directory
 
+    def _generate_csr(self, order: Order, private_key: rsa.RSAPrivateKey) -> x509.CertificateSigningRequest:
+        common_name = order.fqdn_list[0]
+        sans = [x509.DNSName(f) for f in order.fqdn_list[1:]]
+        csr = x509.CertificateSigningRequestBuilder().subject_name(x509.Name([
+            x509.NameAttribute(NameOID.COMMON_NAME, common_name)
+        ])).add_extension(
+            x509.SubjectAlternativeName(sans),
+            critical=False
+        ).sign(private_key, hashes.SHA256(), default_backend())
+        return csr
+
     def new_account(self, email: str):
         url = self._directory_data['newAccount']
         payload = {
@@ -305,30 +331,17 @@ class LetsEncryptApiClient:
         )
         response.raise_for_status()
 
-    def issue_cert(self, order: Order):
-        private_key = rsa.generate_private_key(
-            public_exponent=65537,
-            key_size=2048,
-            backend=default_backend()
-        )
+    def issue_cert(self, order: Order) -> Order:
+        private_key = CryptoUtil.generate_private_key()
         base_path = self._base_path(order.fqdn_list)
         with (base_path / Path('key.pem')).open(mode='w') as f:
-            key = private_key.private_bytes(
-                encoding=serialization.Encoding.PEM,
-                format=serialization.PrivateFormat.TraditionalOpenSSL,
-                encryption_algorithm=serialization.NoEncryption()
-            )
-            f.write(key.decode())
-        common_name = order.fqdn_list[0]
-        sans = [x509.DNSName(f) for f in order.fqdn_list[1:]]
-        csr = x509.CertificateSigningRequestBuilder().subject_name(x509.Name([
-            x509.NameAttribute(NameOID.COMMON_NAME, common_name)
-        ])).add_extension(
-            x509.SubjectAlternativeName(sans),
-            critical=False
-        ).sign(private_key, hashes.SHA256(), default_backend())
+            pem = CryptoUtil.convert_private_key_to_pem(private_key)
+            f.write(pem)
+
+        csr = self._generate_csr(order, private_key)
         with (base_path / Path('csr.pem')).open(mode='w') as f:
             f.write(csr.public_bytes(serialization.Encoding.PEM).decode())
+
         csr_der = self._base64(csr.public_bytes(serialization.Encoding.DER))
         payload = {
             'csr': csr_der
@@ -339,6 +352,7 @@ class LetsEncryptApiClient:
             kid=self._account.url
         )
         response.raise_for_status()
+        return self.fetch_order(order.fqdn_list)
 
     def download_cert(self, order: Order):
         response = requests.get(
