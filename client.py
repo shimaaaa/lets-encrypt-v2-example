@@ -176,7 +176,7 @@ class Order:
 class LetsEncryptApiClient:
 
     DIRECTORY_URL = 'https://acme-v02.api.letsencrypt.org/directory'
-    STAGING_DIRECTORY_URL = 'https://acme-v02.api.letsencrypt.org/directory'
+    STAGING_DIRECTORY_URL = 'https://acme-staging-v02.api.letsencrypt.org/directory'
 
     def __init__(self, account: Account, **kwargs):
         self._account = account
@@ -184,7 +184,8 @@ class LetsEncryptApiClient:
         is_staging = kwargs.get('is_staging', False)
         if is_staging:
             self._directory_url = self.STAGING_DIRECTORY_URL
-        self._directory_url = kwargs.get('directory_url', self.DIRECTORY_URL)
+        else:
+            self._directory_url = kwargs.get('directory_url', self.DIRECTORY_URL)
         self._directory_data = self._get_directory_data()
         self._nonce = self._new_nonce()
 
