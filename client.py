@@ -2,7 +2,7 @@ import json
 import base64
 import hashlib
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 from logging import getLogger, INFO
 
 import requests
@@ -118,7 +118,7 @@ class Authorization:
         return self.resource.get('expires')
 
     @property
-    def dns_challenge(self) -> DnsChallenge:
+    def dns_challenge(self) -> Optional[DnsChallenge]:
         for challenge in self.resource.get('challenges'):
             if challenge.get('type') == 'dns-01':
                 return DnsChallenge(challenge)
